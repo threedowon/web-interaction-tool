@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Interaction Tool</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <span id="current-date">Sat — 19 January</span>
+        </div>
+        <div class="header-right">
+            <span id="current-year">2019</span>
+            <div class="window-controls">
+                <button class="window-btn minimize">−</button>
+                <button class="window-btn maximize">□</button>
+                <button class="window-btn close">×</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Left Sidebar -->
+        <aside class="sidebar left-sidebar">
+            <!-- Forms Section -->
+            <section class="section">
+                <h2 class="section-title">Forms</h2>
+                <div class="forms-grid">
+                    <button class="form-btn" data-shape="cube" title="Cube">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        </svg>
+                    </button>
+                    <button class="form-btn" data-shape="sphere" title="Sphere">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                        </svg>
+                    </button>
+                    <button class="form-btn" data-shape="cone" title="Cone">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 22h20L12 2z"/>
+                        </svg>
+                    </button>
+                    <button class="form-btn" data-shape="cylinder" title="Cylinder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <ellipse cx="12" cy="5" rx="8" ry="2"/>
+                            <path d="M4 5v14c0 1.1 3.6 2 8 2s8-.9 8-2V5"/>
+                            <ellipse cx="12" cy="19" rx="8" ry="2"/>
+                        </svg>
+                    </button>
+                    <button class="form-btn" data-shape="torus" title="More">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M12 1v6m0 6v6"/>
+                        </svg>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Tools Section -->
+            <section class="section">
+                <h2 class="section-title">Tools</h2>
+                <div class="tools-list">
+                    <button class="tool-btn" data-tool="render" title="Render">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <path d="M9 9l6 6M15 9l-6 6"/>
+                        </svg>
+                        <span>Render</span>
+                    </button>
+                    <button class="tool-btn active" data-tool="rotation" title="Rotation">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <path d="M12 6v12M6 12h12" stroke-dasharray="2 2"/>
+                            <circle cx="12" cy="12" r="2"/>
+                        </svg>
+                        <span>Rotation</span>
+                    </button>
+                    <button class="tool-btn" data-tool="texture" title="Texture">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <path d="M3 9h18M9 3v18"/>
+                        </svg>
+                        <span>Texture</span>
+                    </button>
+                    <button class="tool-btn" data-tool="polygons" title="Polygons">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                        </svg>
+                        <span>Polygons</span>
+                    </button>
+                    <button class="tool-btn" data-tool="points" title="Points">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <circle cx="8" cy="8" r="1"/>
+                            <circle cx="16" cy="8" r="1"/>
+                            <circle cx="8" cy="16" r="1"/>
+                            <circle cx="16" cy="16" r="1"/>
+                            <circle cx="12" cy="12" r="1"/>
+                        </svg>
+                        <span>Points</span>
+                    </button>
+                    <button class="tool-btn" data-tool="intrude" title="Intrude">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <path d="M12 6v12M9 9l3-3 3 3"/>
+                        </svg>
+                        <span>Intrude</span>
+                    </button>
+                </div>
+            </section>
+        </aside>
+
+        <!-- Main Canvas -->
+        <main class="canvas-container">
+            <div id="canvas-wrapper">
+                <canvas id="canvas"></canvas>
+            </div>
+            <div class="canvas-controls">
+                <div class="axis-indicator">
+                    <span class="axis-x">X</span>
+                    <span class="axis-y">Y</span>
+                    <span class="axis-z">Z</span>
+                </div>
+                <div class="rotation-display">
+                    <div class="rotation-arc">
+                        <svg viewBox="0 0 100 50" class="arc-svg">
+                            <path d="M 10 40 Q 50 10 90 40" fill="none" stroke="currentColor" stroke-width="2"/>
+                        </svg>
+                    </div>
+                    <div class="rotation-info">
+                        <span class="rotation-label">Rotation</span>
+                        <span class="rotation-value" id="rotation-value">35°</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Sidebar -->
+        <aside class="sidebar right-sidebar">
+            <section class="section">
+                <h2 class="section-title">Lightning</h2>
+                <div class="lightning-grid">
+                    <button class="lightning-btn active" data-light="spot" title="Spot">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2v4M12 18v4M4 12H2M22 12h-2M5.64 5.64l-2.83 2.83M21.19 21.19l-2.83-2.83M18.36 5.64l2.83 2.83M2.81 21.19l2.83-2.83"/>
+                            <circle cx="12" cy="12" r="3"/>
+                        </svg>
+                        <span>Spot</span>
+                    </button>
+                    <button class="lightning-btn" data-light="area" title="Area">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <path d="M8 8h8v8H8z" stroke-dasharray="2 2"/>
+                        </svg>
+                        <span>Area</span>
+                    </button>
+                    <button class="lightning-btn" data-light="target" title="Target">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <circle cx="12" cy="12" r="6"/>
+                            <circle cx="12" cy="12" r="2"/>
+                        </svg>
+                        <span>Target</span>
+                    </button>
+                    <button class="lightning-btn" data-light="sun" title="Sun">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="5"/>
+                            <path d="M12 1v4M12 19v4M1 12h4M19 12h4M3.34 3.34l2.83 2.83M17.83 17.83l2.83 2.83M3.34 20.66l2.83-2.83M17.83 6.17l2.83-2.83"/>
+                        </svg>
+                        <span>Sun</span>
+                    </button>
+                </div>
+
+                <div class="slider-control">
+                    <label for="brightness-slider">Brightness</label>
+                    <input type="range" id="brightness-slider" min="0" max="100" value="15" class="slider">
+                    <span class="slider-value" id="brightness-value">15</span>
+                </div>
+
+                <div class="slider-control">
+                    <label for="shadow-slider">Shadow Density</label>
+                    <input type="range" id="shadow-slider" min="0" max="100" value="50" class="slider">
+                    <span class="slider-value" id="shadow-value">50</span>
+                </div>
+            </section>
+        </aside>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-left">
+            <div class="logo">END IS UI</div>
+        </div>
+        <div class="footer-right">
+            <span class="page-number">013</span>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
+
