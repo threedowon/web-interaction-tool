@@ -5,35 +5,26 @@ const ctx = canvasEl.getContext('2d');
 const hintOverlay = document.getElementById('hint-overlay');
 const startBtn = document.getElementById('start-btn');
 const switchCamBtn = document.getElementById('switch-cam-btn');
+const resetBaselineBtn = document.getElementById('reset-baseline-btn');
 const overlayToggle = document.getElementById('overlay-toggle');
+const debugReadout = document.getElementById('debug-readout');
 const wsUrlInput = document.getElementById('ws-url');
 const wsConnectBtn = document.getElementById('ws-connect-btn');
 const wsStatusEl = document.getElementById('ws-status');
 const eventLogEl = document.getElementById('event-log');
 const threshPage = document.getElementById('thresh-page');
 const threshUnderline = document.getElementById('thresh-underline');
-const threshPinch = document.getElementById('thresh-pinch');
+const threshCorner = document.getElementById('thresh-pinch');
+const threshMotion = document.getElementById('thresh-motion');
 
-// ---- State ----
+// ---- Camera state ----
 let currentFacing = 'environment';
 let stream = null;
-let hands = null;
-let ws = null;
 let running = false;
 
-const COOLDOWN_MS = 800;
-const HISTORY_MS = 700;
-
-let landmarkHistory = []; // [{ t, lm }]
-let pointingTrace = [];   // [{ t, x, y }] while in pointing pose
-let pinchStart = null;    // { t, x, y }
-let pinchFired = false;
-
-let lastPageTurnAt = 0;
-let lastUnderlineAt = 0;
-let lastPinchAt = 0;
-
 // ---- WebSocket ----
+let ws = null;
+
 function connectWS() {
     const url = wsUrlInput.value.trim();
     if (!url) return;
@@ -109,9 +100,11 @@ async function startCamera() {
 
     hintOverlay.classList.add('hidden');
     switchCamBtn.disabled = false;
+    resetBaselineBtn.disabled = false;
     startBtn.textContent = '카메라 켜짐';
     startBtn.disabled = true;
     running = true;
+    resetMotionState();
     requestAnimationFrame(frameLoop);
 }
 
@@ -120,6 +113,11 @@ videoEl.addEventListener('loadedmetadata', () => {
     canvasEl.height = videoEl.videoHeight;
     document.querySelector('.video-wrap').style.aspectRatio =
         `${videoEl.videoWidth} / ${videoEl.videoHeight}`;
+
+    // Keep the analysis buffer small for speed, but preserve the real aspect
+    // ratio so bbox-shape heuristics (aspect ratio, corner distance) stay valid.
+    sampleCanvas.width = 320;
+    sampleCanvas.height = Math.round(320 * (videoEl.videoHeight / videoEl.videoWidth));
 });
 
 startBtn.addEventListener('click', startCamera);
@@ -129,88 +127,44 @@ switchCamBtn.addEventListener('click', async () => {
     if (stream) {
         stream.getTracks().forEach((t) => t.stop());
     }
-    landmarkHistory = [];
-    pointingTrace = [];
-    pinchStart = null;
     await startCamera();
 });
 
+resetBaselineBtn.addEventListener('click', () => {
+    resetMotionState();
+});
+
 overlayToggle.addEventListener('change', () => {
-    canvasEl.style.display = overlayToggle.checked ? 'block' : 'none';
-});
-
-// ---- MediaPipe Hands ----
-hands = new Hands({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
-});
-hands.setOptions({
-    maxNumHands: 1,
-    modelComplexity: 0,
-    minDetectionConfidence: 0.6,
-    minTrackingConfidence: 0.6,
-});
-hands.onResults(onHandsResults);
-
-async function frameLoop() {
-    if (!running) return;
-    if (videoEl.readyState >= 2) {
-        await hands.send({ image: videoEl });
+    if (!overlayToggle.checked) {
+        ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
     }
-    requestAnimationFrame(frameLoop);
-}
+});
 
-function onHandsResults(results) {
-    ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+// ---- Frame sampling ----
+const sampleCanvas = document.createElement('canvas');
+sampleCanvas.width = 320;
+sampleCanvas.height = 180;
+const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
 
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        const lm = results.multiHandLandmarks[0];
-        drawConnectors(ctx, lm, HAND_CONNECTIONS, { color: '#00FF99', lineWidth: 2 });
-        drawLandmarks(ctx, lm, { color: '#FF3366', radius: 3 });
+const maskCanvas = document.createElement('canvas');
+const maskCtx = maskCanvas.getContext('2d');
 
-        const now = performance.now();
-        landmarkHistory.push({ t: now, lm });
-        landmarkHistory = landmarkHistory.filter((e) => now - e.t <= HISTORY_MS);
-
-        detectPageTurn(now);
-        detectPinchFold(now, lm);
-        detectUnderline(now, lm);
-    } else {
-        landmarkHistory = [];
-        pointingTrace = [];
-        pinchStart = null;
-        pinchFired = false;
+function grabGrayFrame() {
+    const w = sampleCanvas.width;
+    const h = sampleCanvas.height;
+    sampleCtx.drawImage(videoEl, 0, 0, w, h);
+    const { data } = sampleCtx.getImageData(0, 0, w, h);
+    const gray = new Uint8ClampedArray(w * h);
+    for (let i = 0, o = 0; i < gray.length; i++, o += 4) {
+        gray[i] = data[o] * 0.299 + data[o + 1] * 0.587 + data[o + 2] * 0.114;
     }
+    return gray;
 }
 
-// ---- Geometry helpers ----
-function dist(a, b) {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return Math.sqrt(dx * dx + dy * dy);
-}
-
-function palmCenter(lm) {
-    return { x: (lm[0].x + lm[9].x) / 2, y: (lm[0].y + lm[9].y) / 2 };
-}
-
-function isFingerExtended(lm, tipIdx, pipIdx) {
-    return dist(lm[tipIdx], lm[0]) > dist(lm[pipIdx], lm[0]);
-}
-
-function isPointingPose(lm) {
-    const indexExt = isFingerExtended(lm, 8, 6);
-    const middleExt = isFingerExtended(lm, 12, 10);
-    const ringExt = isFingerExtended(lm, 16, 14);
-    const pinkyExt = isFingerExtended(lm, 20, 18);
-    return indexExt && !middleExt && !ringExt && !pinkyExt;
-}
-
-function isOpenHand(lm) {
-    const indexExt = isFingerExtended(lm, 8, 6);
-    const middleExt = isFingerExtended(lm, 12, 10);
-    const ringExt = isFingerExtended(lm, 16, 14);
-    const pinkyExt = isFingerExtended(lm, 20, 18);
-    return indexExt && middleExt && ringExt && pinkyExt;
+function meanAbsDiff(a, b) {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]);
+    return sum / a.length;
 }
 
 // sensitivity: 1 (least sensitive) .. 10 (most sensitive)
@@ -219,108 +173,235 @@ function mapSensitivity(value, atLeastSensitive, atMostSensitive) {
     return atLeastSensitive - t * (atLeastSensitive - atMostSensitive);
 }
 
-// ---- Gesture: page turn (open hand sweeps sideways) ----
-function detectPageTurn(now) {
-    if (now - lastPageTurnAt < COOLDOWN_MS) return;
-    if (landmarkHistory.length < 2) return;
+// ---- Motion state machine ----
+// idle: nothing happening, baseline tracks the live (stable) frame.
+// moving: a motion spike started; baseline is frozen at the pre-spike frame.
+// settling: motion dropped back down; we wait a short stabilization window
+//           before diffing pre-spike vs post-spike frames, so the "after"
+//           frame isn't a blurry mid-flip snapshot.
+const STATE = { IDLE: 'idle', MOVING: 'moving', SETTLING: 'settling' };
 
-    const newest = landmarkHistory[landmarkHistory.length - 1];
-    if (!isOpenHand(newest.lm)) return;
+let state = STATE.IDLE;
+let lastFrame = null;
+let stableFrame = null;
+let preMotionFrame = null;
+let consecutiveAboveStart = 0;
+let belowEndSince = 0;
+let motionStartAt = 0;
+let settleUntil = 0;
+let peakMotionScore = 0;
+let lastMaskRenderAt = 0;
 
-    const windowMs = 350;
-    let oldest = newest;
-    for (let i = landmarkHistory.length - 1; i >= 0; i--) {
-        oldest = landmarkHistory[i];
-        if (newest.t - oldest.t >= windowMs) break;
-    }
-    if (newest.t - oldest.t < windowMs * 0.6) return;
+const SETTLE_DELAY_MS = 250;
+const SETTLE_GRACE_MS = 150;
+const MAX_MOVING_MS = 3000;
 
-    const p0 = palmCenter(oldest.lm);
-    const p1 = palmCenter(newest.lm);
-    const dx = p1.x - p0.x;
-    const dy = p1.y - p0.y;
-
-    const sensitivity = parseInt(threshPage.value, 10);
-    const minDx = mapSensitivity(sensitivity, 0.45, 0.18);
-
-    if (Math.abs(dx) > minDx && Math.abs(dy) < Math.abs(dx) * 0.6) {
-        lastPageTurnAt = now;
-        sendEvent('page_turn', { direction: dx > 0 ? 'right' : 'left' });
-        landmarkHistory = [];
-    }
+function resetMotionState() {
+    state = STATE.IDLE;
+    lastFrame = null;
+    stableFrame = null;
+    preMotionFrame = null;
+    consecutiveAboveStart = 0;
+    belowEndSince = 0;
+    peakMotionScore = 0;
 }
 
-// ---- Gesture: bookmark fold (thumb-index pinch held in place) ----
-function detectPinchFold(now, lm) {
-    const thumbTip = lm[4];
-    const indexTip = lm[8];
-    const handSize = dist(lm[0], lm[9]) || 1;
-    const pinchDist = dist(thumbTip, indexTip) / handSize;
+let lastProcessAt = 0;
+const PROCESS_INTERVAL_MS = 1000 / 15;
 
-    const sensitivity = parseInt(threshPinch.value, 10);
-    const pinchThreshold = mapSensitivity(sensitivity, 0.55, 0.25);
-    const holdDuration = mapSensitivity(sensitivity, 700, 350);
+function frameLoop(ts) {
+    if (!running) return;
+    if (videoEl.readyState >= 2 && ts - lastProcessAt >= PROCESS_INTERVAL_MS) {
+        lastProcessAt = ts;
+        processFrame();
+    }
+    requestAnimationFrame(frameLoop);
+}
 
-    const mid = { x: (thumbTip.x + indexTip.x) / 2, y: (thumbTip.y + indexTip.y) / 2 };
+function processFrame() {
+    const gray = grabGrayFrame();
 
-    if (pinchDist < pinchThreshold) {
-        if (!pinchStart) {
-            pinchStart = { t: now, x: mid.x, y: mid.y };
-            pinchFired = false;
+    if (!lastFrame || lastFrame.length !== gray.length) {
+        lastFrame = gray;
+        stableFrame = gray;
+        return;
+    }
+
+    const score = meanAbsDiff(gray, lastFrame);
+    lastFrame = gray;
+
+    const motionSens = parseInt(threshMotion.value, 10);
+    const startThresh = mapSensitivity(motionSens, 22, 7);
+    const endThresh = startThresh * 0.5;
+    const now = performance.now();
+
+    if (state === STATE.IDLE) {
+        if (score > startThresh) {
+            consecutiveAboveStart++;
+            if (consecutiveAboveStart >= 2) {
+                state = STATE.MOVING;
+                preMotionFrame = stableFrame;
+                motionStartAt = now;
+                peakMotionScore = score;
+                consecutiveAboveStart = 0;
+            }
+        } else {
+            consecutiveAboveStart = 0;
+            stableFrame = gray;
+        }
+    } else if (state === STATE.MOVING) {
+        peakMotionScore = Math.max(peakMotionScore, score);
+
+        if (now - motionStartAt > MAX_MOVING_MS) {
+            // Motion never settled (camera shake, walking, etc.) - bail out.
+            resetMotionState();
+            stableFrame = gray;
             return;
         }
 
-        const moved = dist(pinchStart, mid);
-        if (
-            !pinchFired &&
-            moved < 0.06 &&
-            now - pinchStart.t > holdDuration &&
-            now - lastPinchAt > COOLDOWN_MS
-        ) {
-            pinchFired = true;
-            lastPinchAt = now;
-            sendEvent('bookmark_fold');
+        if (score < endThresh) {
+            if (!belowEndSince) belowEndSince = now;
+            if (now - belowEndSince > SETTLE_GRACE_MS) {
+                state = STATE.SETTLING;
+                settleUntil = now + SETTLE_DELAY_MS;
+                belowEndSince = 0;
+            }
+        } else {
+            belowEndSince = 0;
         }
-    } else {
-        pinchStart = null;
-        pinchFired = false;
+    } else if (state === STATE.SETTLING) {
+        if (score > startThresh) {
+            // Motion resumed mid-stroke; keep the original pre-motion baseline.
+            state = STATE.MOVING;
+            belowEndSince = 0;
+        } else if (now >= settleUntil) {
+            classifyChange(preMotionFrame, gray, peakMotionScore);
+            stableFrame = gray;
+            resetMotionState();
+        }
     }
+
+    debugReadout.textContent = `state: ${state} / motion: ${score.toFixed(1)}`;
 }
 
-// ---- Gesture: underline (pointing finger traces a straight horizontal line) ----
-function detectUnderline(now, lm) {
-    if (now - lastUnderlineAt < COOLDOWN_MS) {
-        pointingTrace = [];
+// ---- Change classification ----
+function classifyChange(before, after, peakScore) {
+    const w = sampleCanvas.width;
+    const h = sampleCanvas.height;
+    const n = w * h;
+    const diffPixelThresh = 28;
+
+    const mask = new Uint8Array(n);
+    let changedCount = 0;
+    let minX = w, minY = h, maxX = 0, maxY = 0;
+
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = y * w + x;
+            if (Math.abs(after[i] - before[i]) > diffPixelThresh) {
+                mask[i] = 1;
+                changedCount++;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+
+    if (changedCount < n * 0.004) {
+        renderDebugMask(mask, w, h, null, '변화 없음');
         return;
     }
 
-    if (isPointingPose(lm)) {
-        const tip = lm[8];
-        pointingTrace.push({ t: now, x: tip.x, y: tip.y });
-        const cutoff = now - 900;
-        pointingTrace = pointingTrace.filter((p) => p.t >= cutoff);
-    } else {
-        pointingTrace = [];
+    const changedRatio = changedCount / n;
+    const bw = maxX - minX + 1;
+    const bh = maxY - minY + 1;
+    const aspect = bw / bh;
+    const cx = (minX + maxX) / 2 / w;
+    const cy = (minY + maxY) / 2 / h;
+    const bbox = { minX, minY, maxX, maxY };
+
+    const pageSens = parseInt(threshPage.value, 10);
+    const pageAreaThresh = mapSensitivity(pageSens, 0.55, 0.25);
+
+    if (changedRatio > pageAreaThresh) {
+        const intensity = Math.min(1, peakScore / 60);
+        sendEvent('page_turn', { direction: cx < 0.5 ? 'left' : 'right', intensity: Number(intensity.toFixed(2)) });
+        renderDebugMask(mask, w, h, bbox, 'PAGE TURN');
         return;
     }
 
-    evaluateUnderlineTrace(now);
+    const cornerSens = parseInt(threshCorner.value, 10);
+    const cornerRadius = mapSensitivity(cornerSens, 0.16, 0.30);
+    const distToCorner = Math.min(
+        Math.hypot(cx, cy),
+        Math.hypot(1 - cx, cy),
+        Math.hypot(cx, 1 - cy),
+        Math.hypot(1 - cx, 1 - cy)
+    );
+
+    if (changedRatio < 0.2 && distToCorner < cornerRadius && aspect > 0.4 && aspect < 2.5) {
+        sendEvent('bookmark_fold');
+        renderDebugMask(mask, w, h, bbox, 'BOOKMARK FOLD');
+        return;
+    }
+
+    const underlineSens = parseInt(threshUnderline.value, 10);
+    const underlineMinAspect = mapSensitivity(underlineSens, 5, 2);
+
+    if (changedRatio < 0.25 && (aspect > underlineMinAspect || aspect < 1 / underlineMinAspect)) {
+        sendEvent('underline');
+        renderDebugMask(mask, w, h, bbox, 'UNDERLINE');
+        return;
+    }
+
+    renderDebugMask(mask, w, h, bbox, '미분류');
 }
 
-function evaluateUnderlineTrace(now) {
-    if (pointingTrace.length < 5) return;
+function renderDebugMask(mask, w, h, bbox, label) {
+    if (!overlayToggle.checked) return;
 
-    const first = pointingTrace[0];
-    const last = pointingTrace[pointingTrace.length - 1];
-    const dx = last.x - first.x;
-    const dy = last.y - first.y;
-
-    const sensitivity = parseInt(threshUnderline.value, 10);
-    const minLen = mapSensitivity(sensitivity, 0.35, 0.12);
-
-    if (Math.abs(dx) > minLen && Math.abs(dy) < Math.abs(dx) * 0.35) {
-        lastUnderlineAt = now;
-        sendEvent('underline', { direction: dx > 0 ? 'right' : 'left' });
-        pointingTrace = [];
+    maskCanvas.width = w;
+    maskCanvas.height = h;
+    const imgData = maskCtx.createImageData(w, h);
+    for (let i = 0; i < mask.length; i++) {
+        if (mask[i]) {
+            const o = i * 4;
+            imgData.data[o] = 255;
+            imgData.data[o + 1] = 60;
+            imgData.data[o + 2] = 60;
+            imgData.data[o + 3] = 140;
+        }
     }
+    maskCtx.putImageData(imgData, 0, 0);
+
+    ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(maskCanvas, 0, 0, canvasEl.width, canvasEl.height);
+
+    if (bbox) {
+        const sx = canvasEl.width / w;
+        const sy = canvasEl.height / h;
+        ctx.strokeStyle = '#4cd3a5';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(
+            bbox.minX * sx,
+            bbox.minY * sy,
+            (bbox.maxX - bbox.minX) * sx,
+            (bbox.maxY - bbox.minY) * sy
+        );
+    }
+
+    ctx.font = '16px sans-serif';
+    ctx.fillStyle = '#4cd3a5';
+    ctx.fillText(label, 10, 22);
+
+    const fadeAt = Date.now();
+    lastMaskRenderAt = fadeAt;
+    setTimeout(() => {
+        if (lastMaskRenderAt === fadeAt) {
+            ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+        }
+    }, 1200);
 }

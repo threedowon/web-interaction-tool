@@ -123,6 +123,13 @@ body {
     color: var(--text-dim);
 }
 
+.debug-readout {
+    margin-top: 8px;
+    font-size: 12px;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    color: var(--text-dim);
+}
+
 button {
     background: var(--panel);
     border: 1px solid var(--border);

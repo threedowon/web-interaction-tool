@@ -22,11 +22,13 @@
             <div class="camera-controls">
                 <button id="start-btn">카메라 시작</button>
                 <button id="switch-cam-btn" disabled>전/후면 전환</button>
+                <button id="reset-baseline-btn" disabled>기준 프레임 재설정</button>
                 <label class="checkbox-label">
                     <input type="checkbox" id="overlay-toggle" checked>
-                    랜드마크 표시
+                    변화 영역 표시
                 </label>
             </div>
+            <div id="debug-readout" class="debug-readout">state: idle / motion: 0</div>
         </section>
 
         <aside class="control-pane">
@@ -48,8 +50,11 @@
                 <label>밑줄 긋기
                     <input id="thresh-underline" type="range" min="1" max="10" value="5">
                 </label>
-                <label>책갈피 (핀치)
+                <label>책갈피 (모서리)
                     <input id="thresh-pinch" type="range" min="1" max="10" value="5">
+                </label>
+                <label>모션 감지
+                    <input id="thresh-motion" type="range" min="1" max="10" value="5">
                 </label>
             </div>
 
@@ -60,9 +65,6 @@
         </aside>
     </main>
 
-    <!-- MediaPipe Hands -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="book-gesture.js"></script>
 </body>
 </html>
