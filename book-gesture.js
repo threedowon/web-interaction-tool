@@ -80,6 +80,19 @@ function logEvent(eventName, extra) {
     }
 }
 
+// Logs every classification attempt (including non-matches) so it's visible
+// whether the analyzer is running at all vs. just not matching any gesture.
+function logDebug(text) {
+    const li = document.createElement('li');
+    li.style.opacity = '0.55';
+    const time = new Date().toLocaleTimeString();
+    li.textContent = `[${time}] (분석) ${text}`;
+    eventLogEl.prepend(li);
+    while (eventLogEl.children.length > 30) {
+        eventLogEl.removeChild(eventLogEl.lastChild);
+    }
+}
+
 // ---- Camera ----
 async function startCamera() {
     try {
@@ -161,10 +174,16 @@ function grabGrayFrame() {
     return gray;
 }
 
-function meanAbsDiff(a, b) {
-    let sum = 0;
-    for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]);
-    return sum / a.length;
+// Ratio of pixels whose brightness changed by more than `threshold`. Unlike a
+// plain mean-abs-diff over the whole frame, this stays sensitive to small,
+// localized motion (a pen sweeping a few % of the frame) instead of being
+// diluted by the large stationary background.
+function changedPixelRatio(a, b, threshold) {
+    let changed = 0;
+    for (let i = 0; i < a.length; i++) {
+        if (Math.abs(a[i] - b[i]) > threshold) changed++;
+    }
+    return changed / a.length;
 }
 
 // sensitivity: 1 (least sensitive) .. 10 (most sensitive)
@@ -227,11 +246,11 @@ function processFrame() {
         return;
     }
 
-    const score = meanAbsDiff(gray, lastFrame);
+    const score = changedPixelRatio(gray, lastFrame, 18);
     lastFrame = gray;
 
     const motionSens = parseInt(threshMotion.value, 10);
-    const startThresh = mapSensitivity(motionSens, 22, 7);
+    const startThresh = mapSensitivity(motionSens, 0.05, 0.008);
     const endThresh = startThresh * 0.5;
     const now = performance.now();
 
@@ -276,12 +295,12 @@ function processFrame() {
             belowEndSince = 0;
         } else if (now >= settleUntil) {
             classifyChange(preMotionFrame, gray, peakMotionScore);
-            stableFrame = gray;
             resetMotionState();
+            stableFrame = gray;
         }
     }
 
-    debugReadout.textContent = `state: ${state} / motion: ${score.toFixed(1)}`;
+    debugReadout.textContent = `state: ${state} / motion: ${(score * 100).toFixed(1)}%`;
 }
 
 // ---- Change classification ----
@@ -310,6 +329,7 @@ function classifyChange(before, after, peakScore) {
     }
 
     if (changedCount < n * 0.004) {
+        logDebug(`변화 없음 (변화 영역 ${(changedCount / n * 100).toFixed(2)}%)`);
         renderDebugMask(mask, w, h, null, '변화 없음');
         return;
     }
@@ -326,7 +346,7 @@ function classifyChange(before, after, peakScore) {
     const pageAreaThresh = mapSensitivity(pageSens, 0.55, 0.25);
 
     if (changedRatio > pageAreaThresh) {
-        const intensity = Math.min(1, peakScore / 60);
+        const intensity = Math.min(1, peakScore / 0.6);
         sendEvent('page_turn', { direction: cx < 0.5 ? 'left' : 'right', intensity: Number(intensity.toFixed(2)) });
         renderDebugMask(mask, w, h, bbox, 'PAGE TURN');
         return;
@@ -356,6 +376,7 @@ function classifyChange(before, after, peakScore) {
         return;
     }
 
+    logDebug(`미분류 (영역 ${(changedRatio * 100).toFixed(1)}%, 비율 ${aspect.toFixed(2)}, 모서리거리 ${distToCorner.toFixed(2)})`);
     renderDebugMask(mask, w, h, bbox, '미분류');
 }
 
