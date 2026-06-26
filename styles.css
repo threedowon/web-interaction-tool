@@ -49,6 +49,17 @@ body {
     gap: 20px;
 }
 
+.nav-link {
+    font-size: 14px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.nav-link:hover {
+    color: var(--text-primary);
+}
+
 #current-year {
     font-size: 14px;
     color: var(--text-secondary);

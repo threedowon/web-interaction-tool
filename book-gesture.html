@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Book Gesture → Unreal</title>
+    <link rel="stylesheet" href="book-gesture.css">
+</head>
+<body>
+    <header class="topbar">
+        <h1>Book Gesture Bridge</h1>
+        <a class="nav-link" href="index.html">3D Tool</a>
+    </header>
+
+    <main class="layout">
+        <section class="camera-pane">
+            <div class="video-wrap">
+                <video id="input-video" playsinline autoplay muted></video>
+                <canvas id="overlay-canvas"></canvas>
+                <div id="hint-overlay" class="hint-overlay">카메라를 시작하세요</div>
+            </div>
+            <div class="camera-controls">
+                <button id="start-btn">카메라 시작</button>
+                <button id="switch-cam-btn" disabled>전/후면 전환</button>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="overlay-toggle" checked>
+                    랜드마크 표시
+                </label>
+            </div>
+        </section>
+
+        <aside class="control-pane">
+            <div class="panel">
+                <h2>Unreal WebSocket</h2>
+                <label for="ws-url">서버 주소</label>
+                <input id="ws-url" type="text" value="ws://192.168.0.10:7070" inputmode="url">
+                <div class="row">
+                    <button id="ws-connect-btn">연결</button>
+                    <span id="ws-status" class="status status-disconnected">연결 안됨</span>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>감도 설정</h2>
+                <label>페이지 넘김
+                    <input id="thresh-page" type="range" min="1" max="10" value="5">
+                </label>
+                <label>밑줄 긋기
+                    <input id="thresh-underline" type="range" min="1" max="10" value="5">
+                </label>
+                <label>책갈피 (핀치)
+                    <input id="thresh-pinch" type="range" min="1" max="10" value="5">
+                </label>
+            </div>
+
+            <div class="panel log-panel">
+                <h2>감지 로그</h2>
+                <ul id="event-log"></ul>
+            </div>
+        </aside>
+    </main>
+
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="book-gesture.js"></script>
+</body>
+</html>
