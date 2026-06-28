@@ -13,8 +13,6 @@ const wsConnectBtn = document.getElementById('ws-connect-btn');
 const wsStatusEl = document.getElementById('ws-status');
 const eventLogEl = document.getElementById('event-log');
 const threshPage = document.getElementById('thresh-page');
-const threshUnderline = document.getElementById('thresh-underline');
-const threshCorner = document.getElementById('thresh-pinch');
 const threshMotion = document.getElementById('thresh-motion');
 
 // ---- Camera state ----
@@ -335,11 +333,7 @@ function classifyChange(before, after, peakScore) {
     }
 
     const changedRatio = changedCount / n;
-    const bw = maxX - minX + 1;
-    const bh = maxY - minY + 1;
-    const aspect = bw / bh;
     const cx = (minX + maxX) / 2 / w;
-    const cy = (minY + maxY) / 2 / h;
     const bbox = { minX, minY, maxX, maxY };
 
     const pageSens = parseInt(threshPage.value, 10);
@@ -352,31 +346,7 @@ function classifyChange(before, after, peakScore) {
         return;
     }
 
-    const cornerSens = parseInt(threshCorner.value, 10);
-    const cornerRadius = mapSensitivity(cornerSens, 0.16, 0.30);
-    const distToCorner = Math.min(
-        Math.hypot(cx, cy),
-        Math.hypot(1 - cx, cy),
-        Math.hypot(cx, 1 - cy),
-        Math.hypot(1 - cx, 1 - cy)
-    );
-
-    if (changedRatio < 0.2 && distToCorner < cornerRadius && aspect > 0.4 && aspect < 2.5) {
-        sendEvent('bookmark_fold');
-        renderDebugMask(mask, w, h, bbox, 'BOOKMARK FOLD');
-        return;
-    }
-
-    const underlineSens = parseInt(threshUnderline.value, 10);
-    const underlineMinAspect = mapSensitivity(underlineSens, 5, 2);
-
-    if (changedRatio < 0.25 && (aspect > underlineMinAspect || aspect < 1 / underlineMinAspect)) {
-        sendEvent('underline');
-        renderDebugMask(mask, w, h, bbox, 'UNDERLINE');
-        return;
-    }
-
-    logDebug(`미분류 (영역 ${(changedRatio * 100).toFixed(1)}%, 비율 ${aspect.toFixed(2)}, 모서리거리 ${distToCorner.toFixed(2)})`);
+    logDebug(`페이지 넘김 아님 (변화 영역 ${(changedRatio * 100).toFixed(1)}%)`);
     renderDebugMask(mask, w, h, bbox, '미분류');
 }
 
