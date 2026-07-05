@@ -229,6 +229,7 @@ let prevMotionCx = null;
 let motionStartCx = null;  // cx at the moment MOVING began
 let swipeCxSum = 0;        // sum of cx values during MOVING (for average)
 let swipeCxCount = 0;      // frames with valid cx during MOVING
+let lastRestartAt = 0;     // timestamp of last restart event
 
 const SETTLE_DELAY_MS = 250;
 const SETTLE_GRACE_MS = 150;
@@ -423,9 +424,16 @@ function classifyChange(before, after, peakScore, gestureDuration) {
     // Fist in center: brief non-directional motion in the center zone → restart.
     const inCenter = avgCx > 0.3 && avgCx < 0.7;
     const notDirectional = Math.abs(avgDx) < swipeThresh;
+    const restartReady = Date.now() - lastRestartAt > 2000;
     if (inCenter && notDirectional && gestureDuration < 800) {
-        sendEvent('restart', {});
-        renderDebugMask(mask, w, h, null, 'RESTART ✊');
+        if (restartReady) {
+            lastRestartAt = Date.now();
+            sendEvent('restart', {});
+            renderDebugMask(mask, w, h, null, 'RESTART ✊');
+        } else {
+            logDebug(`restart 쿨다운 중 (${((2000 - (Date.now() - lastRestartAt)) / 1000).toFixed(1)}초 남음)`);
+            renderDebugMask(mask, w, h, null, '쿨다운');
+        }
         return;
     }
 
