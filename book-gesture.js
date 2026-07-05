@@ -306,7 +306,7 @@ function classifyChange(before, after, peakScore) {
     const w = sampleCanvas.width;
     const h = sampleCanvas.height;
     const n = w * h;
-    const diffPixelThresh = 28;
+    const diffPixelThresh = 12;
 
     const mask = new Uint8Array(n);
     let changedCount = 0;
