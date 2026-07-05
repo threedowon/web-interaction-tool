@@ -172,16 +172,22 @@ function grabGrayFrame() {
     return gray;
 }
 
-// Ratio of pixels whose brightness changed by more than `threshold`. Unlike a
-// plain mean-abs-diff over the whole frame, this stays sensitive to small,
-// localized motion (a pen sweeping a few % of the frame) instead of being
-// diluted by the large stationary background.
-function changedPixelRatio(a, b, threshold) {
-    let changed = 0;
+// Single O(n) pass: changed-pixel ratio (motion gate) + horizontal centroid
+// of the changed pixels (swipe direction). cx is normalized 0..1 left-to-right,
+// null when too few pixels changed to be meaningful.
+function computeFrameMotion(a, b, threshold) {
+    const w = sampleCanvas.width;
+    let sumX = 0, count = 0;
     for (let i = 0; i < a.length; i++) {
-        if (Math.abs(a[i] - b[i]) > threshold) changed++;
+        if (Math.abs(a[i] - b[i]) > threshold) {
+            sumX += i % w;
+            count++;
+        }
     }
-    return changed / a.length;
+    return {
+        ratio: count / a.length,
+        cx: count > 30 ? (sumX / count) / w : null,
+    };
 }
 
 // sensitivity: 1 (least sensitive) .. 10 (most sensitive)
@@ -208,6 +214,9 @@ let motionStartAt = 0;
 let settleUntil = 0;
 let peakMotionScore = 0;
 let lastMaskRenderAt = 0;
+let swipeDx = 0;       // accumulated horizontal centroid shift during MOVING
+let swipeFrames = 0;   // frames that contributed to swipeDx
+let prevMotionCx = null;
 
 const SETTLE_DELAY_MS = 250;
 const SETTLE_GRACE_MS = 150;
@@ -221,6 +230,9 @@ function resetMotionState() {
     consecutiveAboveStart = 0;
     belowEndSince = 0;
     peakMotionScore = 0;
+    swipeDx = 0;
+    swipeFrames = 0;
+    prevMotionCx = null;
 }
 
 let lastProcessAt = 0;
@@ -244,7 +256,7 @@ function processFrame() {
         return;
     }
 
-    const score = changedPixelRatio(gray, lastFrame, 18);
+    const { ratio: score, cx: motionCx } = computeFrameMotion(gray, lastFrame, 18);
     lastFrame = gray;
 
     const motionSens = parseInt(threshMotion.value, 10);
@@ -261,6 +273,7 @@ function processFrame() {
                 motionStartAt = now;
                 peakMotionScore = score;
                 consecutiveAboveStart = 0;
+                prevMotionCx = motionCx;
             }
         } else {
             consecutiveAboveStart = 0;
@@ -269,8 +282,14 @@ function processFrame() {
     } else if (state === STATE.MOVING) {
         peakMotionScore = Math.max(peakMotionScore, score);
 
+        // Accumulate horizontal centroid shift to track swipe direction.
+        if (motionCx !== null && prevMotionCx !== null) {
+            swipeDx += motionCx - prevMotionCx;
+            swipeFrames++;
+        }
+        prevMotionCx = motionCx;
+
         if (now - motionStartAt > MAX_MOVING_MS) {
-            // Motion never settled (camera shake, walking, etc.) - bail out.
             resetMotionState();
             stableFrame = gray;
             return;
@@ -288,7 +307,6 @@ function processFrame() {
         }
     } else if (state === STATE.SETTLING) {
         if (score > startThresh) {
-            // Motion resumed mid-stroke; keep the original pre-motion baseline.
             state = STATE.MOVING;
             belowEndSince = 0;
         } else if (now >= settleUntil) {
@@ -298,7 +316,8 @@ function processFrame() {
         }
     }
 
-    debugReadout.textContent = `state: ${state} / motion: ${(score * 100).toFixed(1)}%`;
+    const swipeDisplay = swipeFrames > 0 ? ` / 스와이프 ${(swipeDx * 100).toFixed(1)}%` : '';
+    debugReadout.textContent = `state: ${state} / motion: ${(score * 100).toFixed(1)}%${swipeDisplay}`;
 }
 
 // ---- Change classification ----
@@ -306,59 +325,43 @@ function classifyChange(before, after, peakScore) {
     const w = sampleCanvas.width;
     const h = sampleCanvas.height;
     const n = w * h;
-    const diffPixelThresh = 20;
 
+    // Confirm the scene actually changed between stable frames (book content
+    // changed vs. just a hand passing in front of a static page).
     const mask = new Uint8Array(n);
     let changedCount = 0;
-    let minX = w, minY = h, maxX = 0, maxY = 0;
-
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            const i = y * w + x;
-            if (Math.abs(after[i] - before[i]) > diffPixelThresh) {
-                mask[i] = 1;
-                changedCount++;
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
-            }
+    for (let i = 0; i < n; i++) {
+        if (Math.abs(after[i] - before[i]) > 20) {
+            mask[i] = 1;
+            changedCount++;
         }
     }
 
+    const avgDx = swipeFrames > 2 ? swipeDx / swipeFrames : 0;
+    const pageSens = parseInt(threshPage.value, 10);
+    // Required average per-frame centroid shift (normalized 0..1 per frame).
+    // A 20%-wide swipe over ~10 active frames = 2%/frame; default slider (5)
+    // requires ~0.9%/frame so normal page turns pass with room to spare.
+    const swipeThresh = mapSensitivity(pageSens, 0.015, 0.003);
+
     if (changedCount < n * 0.002) {
-        logDebug(`변화 없음 (${changedCount}px)`);
+        // Scene barely changed: probably just a hand passing over without
+        // turning a page — ignore even if there was a swipe.
+        logDebug(`변화 없음 (스와이프 ${(swipeDx * 100).toFixed(1)}%)`);
         renderDebugMask(mask, w, h, null, '변화 없음');
         return;
     }
 
-    // Use bounding-box area (not raw pixel count) as the size metric so a
-    // far-away, small-in-frame book still registers a page turn: even if only
-    // some book pixels clear the brightness threshold, they're spread across
-    // the whole page area and establish a bbox that spans the book regardless
-    // of how small the book is in the frame.
-    const bboxW = maxX - minX + 1;
-    const bboxH = maxY - minY + 1;
-    const bboxArea = bboxW * bboxH;
-    const bboxFraction = bboxArea / n;
-    const bboxFill = changedCount / bboxArea;
-    const cx = (minX + maxX) / 2 / w;
-    const bbox = { minX, minY, maxX, maxY };
-
-    const pageSens = parseInt(threshPage.value, 10);
-    const pageBboxThresh = mapSensitivity(pageSens, 0.15, 0.04);
-
-    // Require the bbox to span a significant area AND be reasonably "filled"
-    // (rules out 2-3 noise pixels at opposite corners giving a huge fake bbox).
-    if (bboxFraction > pageBboxThresh && bboxFill > 0.06) {
+    if (Math.abs(avgDx) > swipeThresh) {
+        const direction = avgDx < 0 ? 'left' : 'right';
         const intensity = Math.min(1, peakScore / 0.6);
-        sendEvent('page_turn', { direction: cx < 0.5 ? 'left' : 'right', intensity: Number(intensity.toFixed(2)) });
-        renderDebugMask(mask, w, h, bbox, 'PAGE TURN');
+        sendEvent('page_turn', { direction, intensity: Number(intensity.toFixed(2)) });
+        renderDebugMask(mask, w, h, null, 'PAGE TURN');
         return;
     }
 
-    logDebug(`페이지 넘김 아님 (bbox ${(bboxFraction * 100).toFixed(1)}% fill ${(bboxFill * 100).toFixed(1)}%)`);
-    renderDebugMask(mask, w, h, bbox, '미분류');
+    logDebug(`페이지 넘김 아님 (스와이프 ${(avgDx * 100).toFixed(2)}%/f, ${swipeFrames}f, 기준 ${(swipeThresh * 100).toFixed(2)}%/f)`);
+    renderDebugMask(mask, w, h, null, '미분류');
 }
 
 function renderDebugMask(mask, w, h, bbox, label) {
