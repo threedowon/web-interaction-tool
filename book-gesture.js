@@ -323,7 +323,7 @@ function processFrame() {
         const pageSens = parseInt(threshPage.value, 10);
 
         if (startZoneX !== null && motionStartCx !== null && swipeCxCount >= 3) {
-            // Start-zone mode: fire when hand moves left from the recorded position.
+            // Start-zone mode: fire on left swipe, silently drop right swipe.
             const nearStart = Math.abs(motionStartCx - startZoneX) < 0.25;
             const leftTrigger = mapSensitivity(pageSens, 0.18, 0.04);
             const absoluteShift = (swipeCxSum / swipeCxCount) - motionStartCx;
@@ -335,13 +335,24 @@ function processFrame() {
                 stableFrame = gray;
                 return;
             }
+            // Right swipe (hand returning) — silently reset.
+            if (nearStart && absoluteShift > leftTrigger) {
+                resetMotionState();
+                stableFrame = gray;
+                return;
+            }
         } else if (startZoneX === null && swipeFrames >= 3) {
-            // Fallback (no start zone set): cumulative swipeDx threshold.
+            // Fallback (no start zone): left only.
             const swipeTrigger = mapSensitivity(pageSens, 0.08, 0.02);
-            if (Math.abs(swipeDx) > swipeTrigger) {
-                const direction = swipeDx < 0 ? 'left' : 'right';
+            if (swipeDx < -swipeTrigger) {
                 const intensity = Math.min(1, peakMotionScore / 0.6);
-                sendEvent('page_turn', { direction, intensity: Number(intensity.toFixed(2)) });
+                sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
+                resetMotionState();
+                stableFrame = gray;
+                return;
+            }
+            // Right swipe — silently reset.
+            if (swipeDx > swipeTrigger) {
                 resetMotionState();
                 stableFrame = gray;
                 return;
@@ -437,17 +448,15 @@ function classifyChange(before, after, peakScore, gestureDuration) {
         return;
     }
 
-    // Page turn fallback (when no start zone, or start-zone check missed in MOVING).
-    if (Math.abs(avgDx) > swipeThresh) {
-        const direction = avgDx < 0 ? 'left' : 'right';
+    // Left swipe only — right swipe (hand returning) silently ignored.
+    if (avgDx < -swipeThresh) {
         const intensity = Math.min(1, peakScore / 0.6);
-        sendEvent('page_turn', { direction, intensity: Number(intensity.toFixed(2)) });
-        renderDebugMask(mask, w, h, null, 'PAGE TURN');
+        sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
+        renderDebugMask(mask, w, h, null, 'PAGE TURN ◀');
         return;
     }
 
-    logDebug(`미분류 (스와이프 ${(avgDx * 100).toFixed(2)}%/f, ${swipeFrames}f)`);
-    renderDebugMask(mask, w, h, null, '미분류');
+    // Right swipe or ambiguous — no log, no event.
 }
 
 function renderDebugMask(mask, w, h, bbox, label) {
