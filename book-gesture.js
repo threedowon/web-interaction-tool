@@ -302,6 +302,18 @@ function processFrame() {
             return;
         }
 
+        // Fire immediately once swipe direction crosses threshold.
+        const pageSensImmediate = parseInt(threshPage.value, 10);
+        const swipeTrigger = mapSensitivity(pageSensImmediate, 0.08, 0.02);
+        if (swipeFrames >= 3 && Math.abs(swipeDx) > swipeTrigger) {
+            const direction = swipeDx < 0 ? 'left' : 'right';
+            const intensity = Math.min(1, peakMotionScore / 0.6);
+            sendEvent('page_turn', { direction, intensity: Number(intensity.toFixed(2)) });
+            resetMotionState();
+            stableFrame = gray;
+            return;
+        }
+
         if (score < endThresh) {
             if (!belowEndSince) belowEndSince = now;
             if (now - belowEndSince > SETTLE_GRACE_MS) {
