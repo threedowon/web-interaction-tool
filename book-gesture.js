@@ -6,7 +6,6 @@ const hintOverlay = document.getElementById('hint-overlay');
 const startBtn = document.getElementById('start-btn');
 const switchCamBtn = document.getElementById('switch-cam-btn');
 const resetBaselineBtn = document.getElementById('reset-baseline-btn');
-const setStartZoneBtn = document.getElementById('set-start-zone-btn');
 const overlayToggle = document.getElementById('overlay-toggle');
 const debugReadout = document.getElementById('debug-readout');
 const wsUrlInput = document.getElementById('ws-url');
@@ -58,8 +57,8 @@ wsConnectBtn.addEventListener('click', () => {
 document.getElementById('test-left-btn').addEventListener('click', () => {
     sendEvent('page_turn', { direction: 'left', intensity: 0.8 });
 });
-document.getElementById('test-right-btn').addEventListener('click', () => {
-    sendEvent('page_turn', { direction: 'right', intensity: 0.8 });
+document.getElementById('restart-btn').addEventListener('click', () => {
+    sendEvent('restart', {});
 });
 
 function sendEvent(eventName, extra = {}) {
@@ -118,7 +117,6 @@ async function startCamera() {
     hintOverlay.classList.add('hidden');
     switchCamBtn.disabled = false;
     resetBaselineBtn.disabled = false;
-    setStartZoneBtn.disabled = false;
     startBtn.textContent = '카메라 켜짐';
     startBtn.disabled = true;
     running = true;
@@ -150,18 +148,8 @@ resetBaselineBtn.addEventListener('click', () => {
     resetMotionState();
 });
 
-// ---- Start zone ----
 // startZoneX: normalized 0..1 horizontal position of the right hand start.
-// When set, page_turn fires as soon as the gesture centroid moves left by
-// the trigger distance from the recorded start position.
-let startZoneX = null;
-
-setStartZoneBtn.addEventListener('click', () => {
-    // Use the most recent motion centroid if available, else default right side.
-    startZoneX = prevMotionCx ?? 0.75;
-    setStartZoneBtn.textContent = `시작: ${(startZoneX * 100).toFixed(0)}%`;
-    logDebug(`시작 위치 설정됨: ${(startZoneX * 100).toFixed(0)}%`);
-});
+let startZoneX = 0.75;
 
 overlayToggle.addEventListener('change', () => {
     if (!overlayToggle.checked) {
@@ -229,7 +217,6 @@ let prevMotionCx = null;
 let motionStartCx = null;  // cx at the moment MOVING began
 let swipeCxSum = 0;        // sum of cx values during MOVING (for average)
 let swipeCxCount = 0;      // frames with valid cx during MOVING
-let lastRestartAt = 0;     // timestamp of last restart event
 
 const SETTLE_DELAY_MS = 250;
 const SETTLE_GRACE_MS = 150;
@@ -374,7 +361,7 @@ function processFrame() {
             state = STATE.MOVING;
             belowEndSince = 0;
         } else if (now >= settleUntil) {
-            classifyChange(preMotionFrame, gray, peakMotionScore, now - motionStartAt);
+            classifyChange(preMotionFrame, gray, peakMotionScore);
             resetMotionState();
             stableFrame = gray;
         }
@@ -407,7 +394,7 @@ function drawStartZoneOverlay() {
 }
 
 // ---- Change classification ----
-function classifyChange(before, after, peakScore, gestureDuration) {
+function classifyChange(before, after, peakScore) {
     const w = sampleCanvas.width;
     const h = sampleCanvas.height;
     const n = w * h;
@@ -429,22 +416,6 @@ function classifyChange(before, after, peakScore, gestureDuration) {
     if (changedCount < n * 0.002) {
         logDebug(`변화 없음 (스와이프 ${(swipeDx * 100).toFixed(1)}%)`);
         renderDebugMask(mask, w, h, null, '변화 없음');
-        return;
-    }
-
-    // Fist in center: brief non-directional motion in the center zone → restart.
-    const inCenter = avgCx > 0.3 && avgCx < 0.7;
-    const notDirectional = Math.abs(avgDx) < swipeThresh;
-    const restartReady = Date.now() - lastRestartAt > 2000;
-    if (inCenter && notDirectional && gestureDuration < 800) {
-        if (restartReady) {
-            lastRestartAt = Date.now();
-            sendEvent('restart', {});
-            renderDebugMask(mask, w, h, null, 'RESTART ✊');
-        } else {
-            logDebug(`restart 쿨다운 중 (${((2000 - (Date.now() - lastRestartAt)) / 1000).toFixed(1)}초 남음)`);
-            renderDebugMask(mask, w, h, null, '쿨다운');
-        }
         return;
     }
 
