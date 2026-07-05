@@ -6,6 +6,7 @@ const hintOverlay = document.getElementById('hint-overlay');
 const startBtn = document.getElementById('start-btn');
 const switchCamBtn = document.getElementById('switch-cam-btn');
 const resetBaselineBtn = document.getElementById('reset-baseline-btn');
+const setStartZoneBtn = document.getElementById('set-start-zone-btn');
 const overlayToggle = document.getElementById('overlay-toggle');
 const debugReadout = document.getElementById('debug-readout');
 const wsUrlInput = document.getElementById('ws-url');
@@ -85,8 +86,6 @@ function logEvent(eventName, extra) {
     }
 }
 
-// Logs every classification attempt (including non-matches) so it's visible
-// whether the analyzer is running at all vs. just not matching any gesture.
 function logDebug(text) {
     const li = document.createElement('li');
     li.style.opacity = '0.55';
@@ -119,6 +118,7 @@ async function startCamera() {
     hintOverlay.classList.add('hidden');
     switchCamBtn.disabled = false;
     resetBaselineBtn.disabled = false;
+    setStartZoneBtn.disabled = false;
     startBtn.textContent = '카메라 켜짐';
     startBtn.disabled = true;
     running = true;
@@ -132,8 +132,6 @@ videoEl.addEventListener('loadedmetadata', () => {
     document.querySelector('.video-wrap').style.aspectRatio =
         `${videoEl.videoWidth} / ${videoEl.videoHeight}`;
 
-    // Keep the analysis buffer small for speed, but preserve the real aspect
-    // ratio so bbox-shape heuristics (aspect ratio, corner distance) stay valid.
     sampleCanvas.width = 320;
     sampleCanvas.height = Math.round(320 * (videoEl.videoHeight / videoEl.videoWidth));
 });
@@ -150,6 +148,19 @@ switchCamBtn.addEventListener('click', async () => {
 
 resetBaselineBtn.addEventListener('click', () => {
     resetMotionState();
+});
+
+// ---- Start zone ----
+// startZoneX: normalized 0..1 horizontal position of the right hand start.
+// When set, page_turn fires as soon as the gesture centroid moves left by
+// the trigger distance from the recorded start position.
+let startZoneX = null;
+
+setStartZoneBtn.addEventListener('click', () => {
+    // Use the most recent motion centroid if available, else default right side.
+    startZoneX = prevMotionCx ?? 0.75;
+    setStartZoneBtn.textContent = `시작: ${(startZoneX * 100).toFixed(0)}%`;
+    logDebug(`시작 위치 설정됨: ${(startZoneX * 100).toFixed(0)}%`);
 });
 
 overlayToggle.addEventListener('change', () => {
@@ -179,9 +190,6 @@ function grabGrayFrame() {
     return gray;
 }
 
-// Single O(n) pass: changed-pixel ratio (motion gate) + horizontal centroid
-// of the changed pixels (swipe direction). cx is normalized 0..1 left-to-right,
-// null when too few pixels changed to be meaningful.
 function computeFrameMotion(a, b, threshold) {
     const w = sampleCanvas.width;
     let sumX = 0, count = 0;
@@ -197,18 +205,12 @@ function computeFrameMotion(a, b, threshold) {
     };
 }
 
-// sensitivity: 1 (least sensitive) .. 10 (most sensitive)
 function mapSensitivity(value, atLeastSensitive, atMostSensitive) {
     const t = (value - 1) / 9;
     return atLeastSensitive - t * (atLeastSensitive - atMostSensitive);
 }
 
 // ---- Motion state machine ----
-// idle: nothing happening, baseline tracks the live (stable) frame.
-// moving: a motion spike started; baseline is frozen at the pre-spike frame.
-// settling: motion dropped back down; we wait a short stabilization window
-//           before diffing pre-spike vs post-spike frames, so the "after"
-//           frame isn't a blurry mid-flip snapshot.
 const STATE = { IDLE: 'idle', MOVING: 'moving', SETTLING: 'settling' };
 
 let state = STATE.IDLE;
@@ -221,9 +223,12 @@ let motionStartAt = 0;
 let settleUntil = 0;
 let peakMotionScore = 0;
 let lastMaskRenderAt = 0;
-let swipeDx = 0;       // accumulated horizontal centroid shift during MOVING
-let swipeFrames = 0;   // frames that contributed to swipeDx
+let swipeDx = 0;
+let swipeFrames = 0;
 let prevMotionCx = null;
+let motionStartCx = null;  // cx at the moment MOVING began
+let swipeCxSum = 0;        // sum of cx values during MOVING (for average)
+let swipeCxCount = 0;      // frames with valid cx during MOVING
 
 const SETTLE_DELAY_MS = 250;
 const SETTLE_GRACE_MS = 150;
@@ -240,6 +245,9 @@ function resetMotionState() {
     swipeDx = 0;
     swipeFrames = 0;
     prevMotionCx = null;
+    motionStartCx = null;
+    swipeCxSum = 0;
+    swipeCxCount = 0;
 }
 
 let lastProcessAt = 0;
@@ -281,6 +289,9 @@ function processFrame() {
                 peakMotionScore = score;
                 consecutiveAboveStart = 0;
                 prevMotionCx = motionCx;
+                motionStartCx = motionCx;
+                swipeCxSum = motionCx ?? 0;
+                swipeCxCount = motionCx !== null ? 1 : 0;
             }
         } else {
             consecutiveAboveStart = 0;
@@ -289,12 +300,18 @@ function processFrame() {
     } else if (state === STATE.MOVING) {
         peakMotionScore = Math.max(peakMotionScore, score);
 
-        // Accumulate horizontal centroid shift to track swipe direction.
         if (motionCx !== null && prevMotionCx !== null) {
             swipeDx += motionCx - prevMotionCx;
             swipeFrames++;
         }
         prevMotionCx = motionCx;
+
+        // Track cx for average and absolute shift from gesture start.
+        if (motionCx !== null) {
+            if (motionStartCx === null) motionStartCx = motionCx;
+            swipeCxSum += motionCx;
+            swipeCxCount++;
+        }
 
         if (now - motionStartAt > MAX_MOVING_MS) {
             resetMotionState();
@@ -302,16 +319,32 @@ function processFrame() {
             return;
         }
 
-        // Fire immediately once swipe direction crosses threshold.
-        const pageSensImmediate = parseInt(threshPage.value, 10);
-        const swipeTrigger = mapSensitivity(pageSensImmediate, 0.08, 0.02);
-        if (swipeFrames >= 3 && Math.abs(swipeDx) > swipeTrigger) {
-            const direction = swipeDx < 0 ? 'left' : 'right';
-            const intensity = Math.min(1, peakMotionScore / 0.6);
-            sendEvent('page_turn', { direction, intensity: Number(intensity.toFixed(2)) });
-            resetMotionState();
-            stableFrame = gray;
-            return;
+        const pageSens = parseInt(threshPage.value, 10);
+
+        if (startZoneX !== null && motionStartCx !== null && swipeCxCount >= 3) {
+            // Start-zone mode: fire when hand moves left from the recorded position.
+            const nearStart = Math.abs(motionStartCx - startZoneX) < 0.25;
+            const leftTrigger = mapSensitivity(pageSens, 0.18, 0.04);
+            const absoluteShift = (swipeCxSum / swipeCxCount) - motionStartCx;
+            if (nearStart && absoluteShift < -leftTrigger) {
+                const intensity = Math.min(1, peakMotionScore / 0.6);
+                sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
+                renderDebugMask(new Uint8Array(sampleCanvas.width * sampleCanvas.height), sampleCanvas.width, sampleCanvas.height, null, 'PAGE TURN ◀');
+                resetMotionState();
+                stableFrame = gray;
+                return;
+            }
+        } else if (startZoneX === null && swipeFrames >= 3) {
+            // Fallback (no start zone set): cumulative swipeDx threshold.
+            const swipeTrigger = mapSensitivity(pageSens, 0.08, 0.02);
+            if (Math.abs(swipeDx) > swipeTrigger) {
+                const direction = swipeDx < 0 ? 'left' : 'right';
+                const intensity = Math.min(1, peakMotionScore / 0.6);
+                sendEvent('page_turn', { direction, intensity: Number(intensity.toFixed(2)) });
+                resetMotionState();
+                stableFrame = gray;
+                return;
+            }
         }
 
         if (score < endThresh) {
@@ -329,24 +362,44 @@ function processFrame() {
             state = STATE.MOVING;
             belowEndSince = 0;
         } else if (now >= settleUntil) {
-            classifyChange(preMotionFrame, gray, peakMotionScore);
+            classifyChange(preMotionFrame, gray, peakMotionScore, now - motionStartAt);
             resetMotionState();
             stableFrame = gray;
         }
     }
 
+    // Draw start zone indicator.
+    drawStartZoneOverlay();
+
     const swipeDisplay = swipeFrames > 0 ? ` / 스와이프 ${(swipeDx * 100).toFixed(1)}%` : '';
-    debugReadout.textContent = `state: ${state} / motion: ${(score * 100).toFixed(1)}%${swipeDisplay}`;
+    const zoneDisplay = startZoneX !== null ? ` / 시작: ${(startZoneX * 100).toFixed(0)}%` : '';
+    debugReadout.textContent = `state: ${state} / motion: ${(score * 100).toFixed(1)}%${swipeDisplay}${zoneDisplay}`;
+}
+
+function drawStartZoneOverlay() {
+    if (!overlayToggle.checked || startZoneX === null || lastMaskRenderAt > Date.now() - 1200) return;
+    const x = startZoneX * canvasEl.width;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(100, 200, 255, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, canvasEl.height);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(100, 200, 255, 0.9)';
+    ctx.font = '14px sans-serif';
+    ctx.fillText('시작', x + 4, 18);
+    ctx.restore();
 }
 
 // ---- Change classification ----
-function classifyChange(before, after, peakScore) {
+function classifyChange(before, after, peakScore, gestureDuration) {
     const w = sampleCanvas.width;
     const h = sampleCanvas.height;
     const n = w * h;
 
-    // Confirm the scene actually changed between stable frames (book content
-    // changed vs. just a hand passing in front of a static page).
     const mask = new Uint8Array(n);
     let changedCount = 0;
     for (let i = 0; i < n; i++) {
@@ -357,20 +410,26 @@ function classifyChange(before, after, peakScore) {
     }
 
     const avgDx = swipeFrames > 2 ? swipeDx / swipeFrames : 0;
+    const avgCx = swipeCxCount > 0 ? swipeCxSum / swipeCxCount : 0.5;
     const pageSens = parseInt(threshPage.value, 10);
-    // Required average per-frame centroid shift (normalized 0..1 per frame).
-    // A 20%-wide swipe over ~10 active frames = 2%/frame; default slider (5)
-    // requires ~0.9%/frame so normal page turns pass with room to spare.
     const swipeThresh = mapSensitivity(pageSens, 0.015, 0.003);
 
     if (changedCount < n * 0.002) {
-        // Scene barely changed: probably just a hand passing over without
-        // turning a page — ignore even if there was a swipe.
         logDebug(`변화 없음 (스와이프 ${(swipeDx * 100).toFixed(1)}%)`);
         renderDebugMask(mask, w, h, null, '변화 없음');
         return;
     }
 
+    // Fist in center: brief non-directional motion in the center zone → restart.
+    const inCenter = avgCx > 0.3 && avgCx < 0.7;
+    const notDirectional = Math.abs(avgDx) < swipeThresh;
+    if (inCenter && notDirectional && gestureDuration < 800) {
+        sendEvent('restart', {});
+        renderDebugMask(mask, w, h, null, 'RESTART ✊');
+        return;
+    }
+
+    // Page turn fallback (when no start zone, or start-zone check missed in MOVING).
     if (Math.abs(avgDx) > swipeThresh) {
         const direction = avgDx < 0 ? 'left' : 'right';
         const intensity = Math.min(1, peakScore / 0.6);
@@ -379,7 +438,7 @@ function classifyChange(before, after, peakScore) {
         return;
     }
 
-    logDebug(`페이지 넘김 아님 (스와이프 ${(avgDx * 100).toFixed(2)}%/f, ${swipeFrames}f, 기준 ${(swipeThresh * 100).toFixed(2)}%/f)`);
+    logDebug(`미분류 (스와이프 ${(avgDx * 100).toFixed(2)}%/f, ${swipeFrames}f)`);
     renderDebugMask(mask, w, h, null, '미분류');
 }
 
