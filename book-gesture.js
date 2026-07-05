@@ -337,7 +337,7 @@ function classifyChange(before, after, peakScore) {
     const bbox = { minX, minY, maxX, maxY };
 
     const pageSens = parseInt(threshPage.value, 10);
-    const pageAreaThresh = mapSensitivity(pageSens, 0.35, 0.10);
+    const pageAreaThresh = mapSensitivity(pageSens, 0.15, 0.04);
 
     if (changedRatio > pageAreaThresh) {
         const intensity = Math.min(1, peakScore / 0.6);
