@@ -148,8 +148,6 @@ resetBaselineBtn.addEventListener('click', () => {
     resetMotionState();
 });
 
-// startZoneX: normalized 0..1 horizontal position of the right hand start.
-let startZoneX = 0.75;
 
 overlayToggle.addEventListener('change', () => {
     if (!overlayToggle.checked) {
@@ -214,9 +212,6 @@ let lastMaskRenderAt = 0;
 let swipeDx = 0;
 let swipeFrames = 0;
 let prevMotionCx = null;
-let motionStartCx = null;  // cx at the moment MOVING began
-let swipeCxSum = 0;        // sum of cx values during MOVING (for average)
-let swipeCxCount = 0;      // frames with valid cx during MOVING
 let waitForIdle = false;   // true after firing page_turn; reset only when scene goes calm
 
 const SETTLE_DELAY_MS = 250;
@@ -234,9 +229,6 @@ function resetMotionState() {
     swipeDx = 0;
     swipeFrames = 0;
     prevMotionCx = null;
-    motionStartCx = null;
-    swipeCxSum = 0;
-    swipeCxCount = 0;
 }
 
 let lastProcessAt = 0;
@@ -278,9 +270,6 @@ function processFrame() {
                 peakMotionScore = score;
                 consecutiveAboveStart = 0;
                 prevMotionCx = motionCx;
-                motionStartCx = motionCx;
-                swipeCxSum = motionCx ?? 0;
-                swipeCxCount = motionCx !== null ? 1 : 0;
             }
         } else {
             consecutiveAboveStart = 0;
@@ -296,13 +285,6 @@ function processFrame() {
         }
         prevMotionCx = motionCx;
 
-        // Track cx for average and absolute shift from gesture start.
-        if (motionCx !== null) {
-            if (motionStartCx === null) motionStartCx = motionCx;
-            swipeCxSum += motionCx;
-            swipeCxCount++;
-        }
-
         if (now - motionStartAt > MAX_MOVING_MS) {
             resetMotionState();
             stableFrame = gray;
@@ -311,44 +293,21 @@ function processFrame() {
 
         const pageSens = parseInt(threshPage.value, 10);
 
-        if (!waitForIdle) {
-            if (startZoneX !== null && motionStartCx !== null && swipeCxCount >= 3) {
-                // Start-zone mode: fire on left swipe, silently drop right swipe.
-                const nearStart = Math.abs(motionStartCx - startZoneX) < 0.25;
-                const leftTrigger = mapSensitivity(pageSens, 0.18, 0.04);
-                const absoluteShift = (swipeCxSum / swipeCxCount) - motionStartCx;
-                if (nearStart && absoluteShift < -leftTrigger) {
-                    waitForIdle = true;
-                    const intensity = Math.min(1, peakMotionScore / 0.6);
-                    sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
-                    renderDebugMask(new Uint8Array(sampleCanvas.width * sampleCanvas.height), sampleCanvas.width, sampleCanvas.height, null, 'PAGE TURN ◀');
-                    resetMotionState();
-                    stableFrame = gray;
-                    return;
-                }
-                // Right swipe (hand returning) — silently reset.
-                if (nearStart && absoluteShift > leftTrigger) {
-                    resetMotionState();
-                    stableFrame = gray;
-                    return;
-                }
-            } else if (startZoneX === null && swipeFrames >= 3) {
-                // Fallback (no start zone): left only.
-                const swipeTrigger = mapSensitivity(pageSens, 0.08, 0.02);
-                if (swipeDx < -swipeTrigger) {
-                    waitForIdle = true;
-                    const intensity = Math.min(1, peakMotionScore / 0.6);
-                    sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
-                    resetMotionState();
-                    stableFrame = gray;
-                    return;
-                }
-                // Right swipe — silently reset.
-                if (swipeDx > swipeTrigger) {
-                    resetMotionState();
-                    stableFrame = gray;
-                    return;
-                }
+        if (!waitForIdle && swipeFrames >= 3) {
+            const swipeTrigger = mapSensitivity(pageSens, 0.08, 0.02);
+            if (swipeDx < -swipeTrigger) {
+                waitForIdle = true;
+                const intensity = Math.min(1, peakMotionScore / 0.6);
+                sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
+                resetMotionState();
+                stableFrame = gray;
+                return;
+            }
+            // Right swipe — silently reset.
+            if (swipeDx > swipeTrigger) {
+                resetMotionState();
+                stableFrame = gray;
+                return;
             }
         }
 
@@ -373,31 +332,10 @@ function processFrame() {
         }
     }
 
-    // Draw start zone indicator.
-    drawStartZoneOverlay();
-
     const swipeDisplay = swipeFrames > 0 ? ` / 스와이프 ${(swipeDx * 100).toFixed(1)}%` : '';
-    const zoneDisplay = startZoneX !== null ? ` / 시작: ${(startZoneX * 100).toFixed(0)}%` : '';
-    debugReadout.textContent = `state: ${state} / motion: ${(score * 100).toFixed(1)}%${swipeDisplay}${zoneDisplay}`;
+    debugReadout.textContent = `state: ${state} / motion: ${(score * 100).toFixed(1)}%${swipeDisplay}`;
 }
 
-function drawStartZoneOverlay() {
-    if (!overlayToggle.checked || startZoneX === null || lastMaskRenderAt > Date.now() - 1200) return;
-    const x = startZoneX * canvasEl.width;
-    ctx.save();
-    ctx.strokeStyle = 'rgba(100, 200, 255, 0.7)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([8, 4]);
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvasEl.height);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(100, 200, 255, 0.9)';
-    ctx.font = '14px sans-serif';
-    ctx.fillText('시작', x + 4, 18);
-    ctx.restore();
-}
 
 // ---- Change classification ----
 function classifyChange(before, after, peakScore) {
@@ -415,7 +353,6 @@ function classifyChange(before, after, peakScore) {
     }
 
     const avgDx = swipeFrames > 2 ? swipeDx / swipeFrames : 0;
-    const avgCx = swipeCxCount > 0 ? swipeCxSum / swipeCxCount : 0.5;
     const pageSens = parseInt(threshPage.value, 10);
     const swipeThresh = mapSensitivity(pageSens, 0.015, 0.003);
 
