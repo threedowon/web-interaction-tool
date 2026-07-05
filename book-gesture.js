@@ -217,6 +217,7 @@ let prevMotionCx = null;
 let motionStartCx = null;  // cx at the moment MOVING began
 let swipeCxSum = 0;        // sum of cx values during MOVING (for average)
 let swipeCxCount = 0;      // frames with valid cx during MOVING
+let waitForIdle = false;   // true after firing page_turn; reset only when scene goes calm
 
 const SETTLE_DELAY_MS = 250;
 const SETTLE_GRACE_MS = 150;
@@ -284,6 +285,7 @@ function processFrame() {
         } else {
             consecutiveAboveStart = 0;
             stableFrame = gray;
+            waitForIdle = false;  // scene is calm — allow next swipe
         }
     } else if (state === STATE.MOVING) {
         peakMotionScore = Math.max(peakMotionScore, score);
@@ -309,40 +311,44 @@ function processFrame() {
 
         const pageSens = parseInt(threshPage.value, 10);
 
-        if (startZoneX !== null && motionStartCx !== null && swipeCxCount >= 3) {
-            // Start-zone mode: fire on left swipe, silently drop right swipe.
-            const nearStart = Math.abs(motionStartCx - startZoneX) < 0.25;
-            const leftTrigger = mapSensitivity(pageSens, 0.18, 0.04);
-            const absoluteShift = (swipeCxSum / swipeCxCount) - motionStartCx;
-            if (nearStart && absoluteShift < -leftTrigger) {
-                const intensity = Math.min(1, peakMotionScore / 0.6);
-                sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
-                renderDebugMask(new Uint8Array(sampleCanvas.width * sampleCanvas.height), sampleCanvas.width, sampleCanvas.height, null, 'PAGE TURN ◀');
-                resetMotionState();
-                stableFrame = gray;
-                return;
-            }
-            // Right swipe (hand returning) — silently reset.
-            if (nearStart && absoluteShift > leftTrigger) {
-                resetMotionState();
-                stableFrame = gray;
-                return;
-            }
-        } else if (startZoneX === null && swipeFrames >= 3) {
-            // Fallback (no start zone): left only.
-            const swipeTrigger = mapSensitivity(pageSens, 0.08, 0.02);
-            if (swipeDx < -swipeTrigger) {
-                const intensity = Math.min(1, peakMotionScore / 0.6);
-                sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
-                resetMotionState();
-                stableFrame = gray;
-                return;
-            }
-            // Right swipe — silently reset.
-            if (swipeDx > swipeTrigger) {
-                resetMotionState();
-                stableFrame = gray;
-                return;
+        if (!waitForIdle) {
+            if (startZoneX !== null && motionStartCx !== null && swipeCxCount >= 3) {
+                // Start-zone mode: fire on left swipe, silently drop right swipe.
+                const nearStart = Math.abs(motionStartCx - startZoneX) < 0.25;
+                const leftTrigger = mapSensitivity(pageSens, 0.18, 0.04);
+                const absoluteShift = (swipeCxSum / swipeCxCount) - motionStartCx;
+                if (nearStart && absoluteShift < -leftTrigger) {
+                    waitForIdle = true;
+                    const intensity = Math.min(1, peakMotionScore / 0.6);
+                    sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
+                    renderDebugMask(new Uint8Array(sampleCanvas.width * sampleCanvas.height), sampleCanvas.width, sampleCanvas.height, null, 'PAGE TURN ◀');
+                    resetMotionState();
+                    stableFrame = gray;
+                    return;
+                }
+                // Right swipe (hand returning) — silently reset.
+                if (nearStart && absoluteShift > leftTrigger) {
+                    resetMotionState();
+                    stableFrame = gray;
+                    return;
+                }
+            } else if (startZoneX === null && swipeFrames >= 3) {
+                // Fallback (no start zone): left only.
+                const swipeTrigger = mapSensitivity(pageSens, 0.08, 0.02);
+                if (swipeDx < -swipeTrigger) {
+                    waitForIdle = true;
+                    const intensity = Math.min(1, peakMotionScore / 0.6);
+                    sendEvent('page_turn', { direction: 'left', intensity: Number(intensity.toFixed(2)) });
+                    resetMotionState();
+                    stableFrame = gray;
+                    return;
+                }
+                // Right swipe — silently reset.
+                if (swipeDx > swipeTrigger) {
+                    resetMotionState();
+                    stableFrame = gray;
+                    return;
+                }
             }
         }
 
