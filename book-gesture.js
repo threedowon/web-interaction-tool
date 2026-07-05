@@ -54,6 +54,13 @@ wsConnectBtn.addEventListener('click', () => {
     }
 });
 
+document.getElementById('test-left-btn').addEventListener('click', () => {
+    sendEvent('page_turn', { direction: 'left', intensity: 0.8 });
+});
+document.getElementById('test-right-btn').addEventListener('click', () => {
+    sendEvent('page_turn', { direction: 'right', intensity: 0.8 });
+});
+
 function sendEvent(eventName, extra = {}) {
     const payload = {
         type: 'book_gesture',
