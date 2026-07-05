@@ -306,7 +306,7 @@ function classifyChange(before, after, peakScore) {
     const w = sampleCanvas.width;
     const h = sampleCanvas.height;
     const n = w * h;
-    const diffPixelThresh = 12;
+    const diffPixelThresh = 20;
 
     const mask = new Uint8Array(n);
     let changedCount = 0;
@@ -326,27 +326,38 @@ function classifyChange(before, after, peakScore) {
         }
     }
 
-    if (changedCount < n * 0.004) {
-        logDebug(`변화 없음 (변화 영역 ${(changedCount / n * 100).toFixed(2)}%)`);
+    if (changedCount < n * 0.002) {
+        logDebug(`변화 없음 (${changedCount}px)`);
         renderDebugMask(mask, w, h, null, '변화 없음');
         return;
     }
 
-    const changedRatio = changedCount / n;
+    // Use bounding-box area (not raw pixel count) as the size metric so a
+    // far-away, small-in-frame book still registers a page turn: even if only
+    // some book pixels clear the brightness threshold, they're spread across
+    // the whole page area and establish a bbox that spans the book regardless
+    // of how small the book is in the frame.
+    const bboxW = maxX - minX + 1;
+    const bboxH = maxY - minY + 1;
+    const bboxArea = bboxW * bboxH;
+    const bboxFraction = bboxArea / n;
+    const bboxFill = changedCount / bboxArea;
     const cx = (minX + maxX) / 2 / w;
     const bbox = { minX, minY, maxX, maxY };
 
     const pageSens = parseInt(threshPage.value, 10);
-    const pageAreaThresh = mapSensitivity(pageSens, 0.15, 0.04);
+    const pageBboxThresh = mapSensitivity(pageSens, 0.15, 0.04);
 
-    if (changedRatio > pageAreaThresh) {
+    // Require the bbox to span a significant area AND be reasonably "filled"
+    // (rules out 2-3 noise pixels at opposite corners giving a huge fake bbox).
+    if (bboxFraction > pageBboxThresh && bboxFill > 0.06) {
         const intensity = Math.min(1, peakScore / 0.6);
         sendEvent('page_turn', { direction: cx < 0.5 ? 'left' : 'right', intensity: Number(intensity.toFixed(2)) });
         renderDebugMask(mask, w, h, bbox, 'PAGE TURN');
         return;
     }
 
-    logDebug(`페이지 넘김 아님 (변화 영역 ${(changedRatio * 100).toFixed(1)}%)`);
+    logDebug(`페이지 넘김 아님 (bbox ${(bboxFraction * 100).toFixed(1)}% fill ${(bboxFill * 100).toFixed(1)}%)`);
     renderDebugMask(mask, w, h, bbox, '미분류');
 }
 
